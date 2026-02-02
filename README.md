@@ -65,7 +65,7 @@ export LDK_SERVER_STORAGE_DIR_PATH=/path/to/storage
 cargo run --bin ldk-server
 ```
 
-- Using CLI arguments (all optional):
+Interact with the node using CLI:
 ```
 ldk-server-cli -b localhost:3002 --api-key your-secret-api-key --tls-cert /path/to/tls_cert.pem onchain-receive # To generate onchain-receive address.
 ldk-server-cli -b localhost:3002 --api-key your-secret-api-key --tls-cert /path/to/tls_cert.pem help # To print help/available commands.

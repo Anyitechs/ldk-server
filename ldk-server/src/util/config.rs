@@ -8,6 +8,7 @@
 // licenses.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::{fs, io};
 
@@ -18,6 +19,14 @@ use ldk_node::lightning::routing::gossip::NodeAlias;
 use ldk_node::liquidity::LSPS2ServiceConfig;
 use log::LevelFilter;
 use serde::{Deserialize, Serialize};
+
+use crate::get_default_data_dir;
+
+const DEFAULT_CONFIG_FILE: &str = "config.toml";
+
+fn get_default_config_path() -> Option<PathBuf> {
+	get_default_data_dir().map(|data_dir| data_dir.join(DEFAULT_CONFIG_FILE))
+}
 
 /// Configuration for LDK Server.
 #[derive(Debug)]
@@ -44,7 +53,7 @@ pub struct TlsConfig {
 	pub hosts: Vec<String>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ChainSource {
 	Rpc { rpc_address: SocketAddr, rpc_user: String, rpc_password: String },
 	Electrum { server_url: String },
@@ -457,7 +466,12 @@ impl From<LSPS2ServiceTomlConfig> for LSPS2ServiceConfig {
 }
 
 #[derive(Parser, Debug)]
-#[command(version, about = "LDK Server Configuration", long_about = None)]
+#[command(
+	version,
+	about = "LDK Server Configuration",
+	long_about = None,
+	override_usage = "ldk-server [config_path]"
+)]
 pub struct ArgsConfig {
 	#[arg(required = false)]
 	config_file: Option<String>,
@@ -493,9 +507,15 @@ pub struct ArgsConfig {
 pub fn load_config(args: &ArgsConfig) -> io::Result<Config> {
 	let mut builder = ConfigBuilder::default();
 
-	if let Some(path) = &args.config_file {
-		let content = fs::read_to_string(path).map_err(|e| {
-			io::Error::new(e.kind(), format!("Failed to read config file '{}': {}", path, e))
+	let config_file = if let Some(path) = &args.config_file {
+		Some(PathBuf::from(path))
+	} else {
+		get_default_config_path().filter(|path| path.exists())
+	};
+
+	if let Some(path) = config_file {
+		let content = fs::read_to_string(&path).map_err(|e| {
+			io::Error::new(e.kind(), format!("Failed to read config file '{:?}': {}", path, e))
 		})?;
 		let toml_config: TomlConfig = toml::from_str(&content).map_err(|e| {
 			io::Error::new(
@@ -505,19 +525,6 @@ pub fn load_config(args: &ArgsConfig) -> io::Result<Config> {
 		})?;
 
 		builder.merge_toml(toml_config);
-	} else {
-		#[cfg(any(feature = "events-rabbitmq", feature = "experimental-lsps2-support"))]
-		return Err(io::Error::new(
-			io::ErrorKind::InvalidInput,
-			format!(
-				"To use the `{}` feature, you must provide a configuration file.",
-				if cfg!(feature = "events-rabbitmq") {
-					"events-rabbitmq"
-				} else {
-					"experimental-lsps2-support"
-				}
-			),
-		));
 	}
 
 	builder.merge_args(args);
@@ -537,12 +544,13 @@ fn missing_field_err(field: &str) -> io::Error {
 
 #[cfg(test)]
 mod tests {
+	use std::str::FromStr;
+
 	use ldk_node::bitcoin::Network;
 	use ldk_node::lightning::ln::msgs::SocketAddress;
 
 	use super::*;
 	use crate::util::config::{load_config, ArgsConfig};
-	use std::str::FromStr;
 	const DEFAULT_CONFIG: &str = r#"
 				[node]
 				network = "regtest"
@@ -1064,7 +1072,7 @@ mod tests {
 
 	#[test]
 	#[cfg(feature = "events-rabbitmq")]
-	fn test_error_if_rabbitmq_feature_without_config_file() {
+	fn test_error_if_rabbitmq_feature_without_valid_config_file() {
 		let args_config = ArgsConfig {
 			config_file: None,
 			node_network: None,
@@ -1081,15 +1089,11 @@ mod tests {
 		assert!(result.is_err());
 		let err = result.unwrap_err();
 		assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-		assert_eq!(
-			err.to_string(),
-			"To use the `events-rabbitmq` feature, you must provide a configuration file."
-		);
 	}
 
 	#[test]
 	#[cfg(feature = "experimental-lsps2-support")]
-	fn test_error_if_lsps2_feature_without_config_file() {
+	fn test_error_if_lsps2_feature_without_valid_config_file() {
 		let args_config = ArgsConfig {
 			config_file: None,
 			node_network: None,
@@ -1106,6 +1110,5 @@ mod tests {
 		assert!(result.is_err());
 		let err = result.unwrap_err();
 		assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-		assert_eq!(err.to_string(), "To use the `experimental-lsps2-support` feature, you must provide a configuration file.");
 	}
 }
