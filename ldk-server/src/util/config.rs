@@ -219,16 +219,10 @@ impl ConfigBuilder {
 		let alias = self
 			.alias
 			.map(|alias_str| {
-				let mut bytes = [0u8; 32];
-				let alias_bytes = alias_str.trim().as_bytes();
-				if alias_bytes.len() > 32 {
-					return Err(io::Error::new(
-						io::ErrorKind::InvalidInput,
-						"node.alias must be at most 32 bytes long.".to_string(),
-					));
-				}
-				bytes[..alias_bytes.len()].copy_from_slice(alias_bytes);
-				Ok(NodeAlias(bytes))
+				let node_alias = parse_alias(alias_str.as_ref()).map_err(|e| {
+					io::Error::new(e.kind(), format!("Failed to parse alias: {}", e))
+				})?;
+				Ok::<NodeAlias, io::Error>(node_alias)
 			})
 			.transpose()?;
 
@@ -243,7 +237,7 @@ impl ConfigBuilder {
 			.filter(|&&is_configured| is_configured)
 			.count();
 
-		if configured_sources_count > 1 {
+		if configured_sources_count != 1 {
 			return Err(io::Error::new(
 				io::ErrorKind::InvalidInput,
 				"Must set a single chain source, multiple were configured".to_string(),
@@ -473,34 +467,70 @@ impl From<LSPS2ServiceTomlConfig> for LSPS2ServiceConfig {
 	override_usage = "ldk-server [config_path]"
 )]
 pub struct ArgsConfig {
-	#[arg(required = false)]
+	#[arg(required = false, help = "The configuration file for running LDK Server.")]
 	config_file: Option<String>,
 
-	#[arg(long, env = "LDK_SERVER_NODE_NETWORK")]
+	#[arg(
+		long,
+		env = "LDK_SERVER_NODE_NETWORK",
+		help = "The used Bitcoin network for the underlying Bitcoin node."
+	)]
 	node_network: Option<Network>,
 
-	#[arg(long, env = "LDK_SERVER_NODE_LISTENING_ADDRESSES")]
+	#[arg(
+		long,
+		env = "LDK_SERVER_NODE_LISTENING_ADDRESSES",
+		help = "The addresses on which the node will listen for incoming connections."
+	)]
 	node_listening_addresses: Option<Vec<String>>,
 
-	#[arg(long, env = "LDK_SERVER_NODE_ANNOUNCEMENT_ADDRESSES")]
+	#[arg(
+		long,
+		env = "LDK_SERVER_NODE_ANNOUNCEMENT_ADDRESSES",
+		help = "The addresses which the node will announce to the gossip network that it accepts connections on."
+	)]
 	node_announcement_addresses: Option<Vec<String>>,
 
-	#[arg(long, env = "LDK_SERVER_NODE_REST_SERVICE_ADDRESS")]
+	#[arg(
+		long,
+		env = "LDK_SERVER_NODE_REST_SERVICE_ADDRESS",
+		help = "The rest service address for the LDK Server API."
+	)]
 	node_rest_service_address: Option<String>,
 
-	#[arg(long, env = "LDK_SERVER_NODE_ALIAS")]
+	#[arg(
+		long,
+		env = "LDK_SERVER_NODE_ALIAS",
+		help = "The node alias that will be used when broadcasting announcements to the gossip network."
+	)]
 	node_alias: Option<String>,
 
-	#[arg(long, env = "LDK_SERVER_BITCOIND_RPC_ADDRESS")]
+	#[arg(
+		long,
+		env = "LDK_SERVER_BITCOIND_RPC_ADDRESS",
+		help = "The underlying Bitcoin node RPC address."
+	)]
 	bitcoind_rpc_address: Option<String>,
 
-	#[arg(long, env = "LDK_SERVER_BITCOIND_RPC_USER")]
+	#[arg(
+		long,
+		env = "LDK_SERVER_BITCOIND_RPC_USER",
+		help = "The underlying Bitcoin node RPC user."
+	)]
 	bitcoind_rpc_user: Option<String>,
 
-	#[arg(long, env = "LDK_SERVER_BITCOIND_RPC_PASSWORD")]
+	#[arg(
+		long,
+		env = "LDK_SERVER_BITCOIND_RPC_PASSWORD",
+		help = "The underlying Bitcoin node RPC password."
+	)]
 	bitcoind_rpc_password: Option<String>,
 
-	#[arg(long, env = "LDK_SERVER_STORAGE_DIR_PATH")]
+	#[arg(
+		long,
+		env = "LDK_SERVER_STORAGE_DIR_PATH",
+		help = "The path where the underlying LDK and BDK persist their data."
+	)]
 	storage_dir_path: Option<String>,
 }
 
@@ -540,6 +570,19 @@ fn missing_field_err(field: &str) -> io::Error {
 			field
 		),
 	)
+}
+
+fn parse_alias(alias_str: &str) -> Result<NodeAlias, io::Error> {
+	let mut bytes = [0u8; 32];
+	let alias_bytes = alias_str.trim().as_bytes();
+	if alias_bytes.len() > 32 {
+		return Err(io::Error::new(
+			io::ErrorKind::InvalidInput,
+			"node.alias must be at most 32 bytes long.".to_string(),
+		));
+	}
+	bytes[..alias_bytes.len()].copy_from_slice(alias_bytes);
+	Ok(NodeAlias(bytes))
 }
 
 #[cfg(test)]
@@ -614,13 +657,6 @@ mod tests {
 		)
 	}
 
-	fn parse_alias(alias_str: &str) -> NodeAlias {
-		let mut bytes = [0u8; 32];
-		let alias_bytes = alias_str.trim().as_bytes();
-		bytes[..alias_bytes.len()].copy_from_slice(alias_bytes);
-		NodeAlias(bytes)
-	}
-
 	#[test]
 	fn test_config_from_file() {
 		let storage_path = std::env::temp_dir();
@@ -654,7 +690,7 @@ mod tests {
 		let expected = Config {
 			listening_addrs: Some(vec![SocketAddress::from_str("localhost:3001").unwrap()]),
 			announcement_addrs: Some(vec![SocketAddress::from_str("54.3.7.81:3001").unwrap()]),
-			alias: Some(parse_alias(alias)),
+			alias: Some(parse_alias(alias).unwrap()),
 			network: Network::Regtest,
 			rest_service_addr: SocketAddr::from_str("127.0.0.1:3002").unwrap(),
 			storage_dir_path: Some("/tmp".to_string()),
@@ -939,7 +975,7 @@ mod tests {
 				args_config.node_rest_service_address.as_deref().unwrap(),
 			)
 			.unwrap(),
-			alias: Some(parse_alias(args_config.node_alias.as_deref().unwrap())),
+			alias: Some(parse_alias(args_config.node_alias.as_deref().unwrap()).unwrap()),
 			storage_dir_path: Some(args_config.storage_dir_path.unwrap()),
 			tls_config: None,
 			chain_source: ChainSource::Rpc {
@@ -1025,7 +1061,7 @@ mod tests {
 				args_config.node_rest_service_address.as_deref().unwrap(),
 			)
 			.unwrap(),
-			alias: Some(parse_alias(args_config.node_alias.as_deref().unwrap())),
+			alias: Some(parse_alias(args_config.node_alias.as_deref().unwrap()).unwrap()),
 			storage_dir_path: Some(args_config.storage_dir_path.unwrap()),
 			tls_config: Some(TlsConfig {
 				cert_path: Some("/path/to/tls.crt".to_string()),
